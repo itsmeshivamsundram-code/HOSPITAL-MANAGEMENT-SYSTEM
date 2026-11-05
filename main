@@ -1,0 +1,165 @@
+DROP DATABASE IF EXISTS hospital_db;
+CREATE DATABASE hospital_db;
+USE hospital_db;
+
+-- ---------- TABLES ----------
+CREATE TABLE departments (
+  department_id INT AUTO_INCREMENT PRIMARY KEY,
+  name          VARCHAR(80) NOT NULL UNIQUE,
+  location      VARCHAR(80)
+);
+
+CREATE TABLE doctors (
+  doctor_id     INT AUTO_INCREMENT PRIMARY KEY,
+  first_name    VARCHAR(50) NOT NULL,
+  last_name     VARCHAR(50) NOT NULL,
+  specialization VARCHAR(80),
+  department_id INT,
+  phone         VARCHAR(20),
+  email         VARCHAR(100) UNIQUE,
+  FOREIGN KEY (department_id) REFERENCES departments(department_id) ON DELETE SET NULL
+);
+
+CREATE TABLE patients (
+  patient_id     INT AUTO_INCREMENT PRIMARY KEY,
+  first_name     VARCHAR(50) NOT NULL,
+  last_name      VARCHAR(50) NOT NULL,
+  dob            DATE,
+  gender         ENUM('MALE','FEMALE','OTHER'),
+  phone          VARCHAR(20),
+  email          VARCHAR(100),
+  address        VARCHAR(255),
+  blood_group    VARCHAR(5),
+  registered_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE appointments (
+  appointment_id INT AUTO_INCREMENT PRIMARY KEY,
+  patient_id     INT NOT NULL,
+  doctor_id      INT NOT NULL,
+  appt_date      DATE NOT NULL,
+  appt_time      TIME NOT NULL,
+  reason         VARCHAR(255),
+  status         ENUM('SCHEDULED','COMPLETED','CANCELLED','NO_SHOW') DEFAULT 'SCHEDULED',
+  FOREIGN KEY (patient_id) REFERENCES patients(patient_id) ON DELETE CASCADE,
+  FOREIGN KEY (doctor_id)  REFERENCES doctors(doctor_id)  ON DELETE CASCADE,
+  UNIQUE KEY uq_doctor_slot (doctor_id, appt_date, appt_time)
+);
+
+CREATE TABLE medical_history (
+  history_id    INT AUTO_INCREMENT PRIMARY KEY,
+  patient_id    INT NOT NULL,
+  doctor_id     INT,
+  visit_date    DATE NOT NULL,
+  diagnosis     VARCHAR(255),
+  treatment     TEXT,
+  notes         TEXT,
+  FOREIGN KEY (patient_id) REFERENCES patients(patient_id) ON DELETE CASCADE,
+  FOREIGN KEY (doctor_id)  REFERENCES doctors(doctor_id)  ON DELETE SET NULL
+);
+
+CREATE TABLE prescriptions (
+  prescription_id INT AUTO_INCREMENT PRIMARY KEY,
+  history_id      INT NOT NULL,
+  medicine_name   VARCHAR(120) NOT NULL,
+  dosage          VARCHAR(50),
+  frequency       VARCHAR(50),
+  duration_days   INT,
+  FOREIGN KEY (history_id) REFERENCES medical_history(history_id) ON DELETE CASCADE
+);
+
+CREATE TABLE bills (
+  bill_id     INT AUTO_INCREMENT PRIMARY KEY,
+  patient_id  INT NOT NULL,
+  bill_date   DATE NOT NULL DEFAULT (CURRENT_DATE),
+  total_amount DECIMAL(12,2) DEFAULT 0,
+  paid        BOOLEAN DEFAULT FALSE,
+  FOREIGN KEY (patient_id) REFERENCES patients(patient_id) ON DELETE CASCADE
+);
+
+CREATE TABLE bill_items (
+  item_id   INT AUTO_INCREMENT PRIMARY KEY,
+  bill_id   INT NOT NULL,
+  description VARCHAR(150),
+  amount    DECIMAL(10,2) NOT NULL,
+  FOREIGN KEY (bill_id) REFERENCES bills(bill_id) ON DELETE CASCADE
+);
+
+-- ---------- TRIGGERS ----------
+DELIMITER $$
+CREATE TRIGGER trg_bill_item_insert
+AFTER INSERT ON bill_items
+FOR EACH ROW
+BEGIN
+  UPDATE bills SET total_amount = total_amount + NEW.amount
+   WHERE bill_id = NEW.bill_id;
+END$$
+DELIMITER ;
+
+-- ---------- VIEWS ----------
+CREATE VIEW v_doctor_schedule AS
+SELECT a.appointment_id, a.appt_date, a.appt_time,
+       CONCAT(d.first_name,' ',d.last_name) AS doctor,
+       CONCAT(p.first_name,' ',p.last_name) AS patient,
+       a.status
+FROM appointments a
+JOIN doctors  d ON a.doctor_id  = d.doctor_id
+JOIN patients p ON a.patient_id = p.patient_id;
+
+CREATE VIEW v_patient_bills AS
+SELECT b.bill_id, CONCAT(p.first_name,' ',p.last_name) AS patient,
+       b.bill_date, b.total_amount, b.paid
+FROM bills b JOIN patients p ON b.patient_id = p.patient_id;
+
+-- ---------- SAMPLE DATA ----------
+INSERT INTO departments (name, location) VALUES
+('Cardiology','Block A'),('Orthopedics','Block B'),('Pediatrics','Block C');
+
+INSERT INTO doctors (first_name,last_name,specialization,department_id,email) VALUES
+('Hamid','Iqbal','Cardiologist',1,'hamid@hosp.com'),
+('Nadia','Saeed','Orthopedic Surgeon',2,'nadia@hosp.com'),
+('Omar','Farooq','Pediatrician',3,'omar@hosp.com');
+
+INSERT INTO patients (first_name,last_name,dob,gender,phone,blood_group) VALUES
+('Zara','Ali','1990-05-12','FEMALE','0321-111','O+'),
+('Yasir','Khan','1985-08-20','MALE','0321-222','A+'),
+('Hina','Riaz','2001-01-30','FEMALE','0321-333','B+');
+
+INSERT INTO appointments (patient_id,doctor_id,appt_date,appt_time,reason,status) VALUES
+(1,1,'2024-03-01','10:00:00','Chest pain','COMPLETED'),
+(2,2,'2024-03-02','11:30:00','Knee injury','COMPLETED'),
+(3,3,'2024-03-03','09:15:00','Fever','SCHEDULED');
+
+INSERT INTO medical_history (patient_id,doctor_id,visit_date,diagnosis,treatment) VALUES
+(1,1,'2024-03-01','Hypertension','Low-salt diet + meds'),
+(2,2,'2024-03-02','Ligament tear','Physiotherapy');
+
+INSERT INTO prescriptions (history_id,medicine_name,dosage,frequency,duration_days) VALUES
+(1,'Amlodipine','5mg','Once daily',30),
+(2,'Ibuprofen','400mg','Twice daily',7);
+
+INSERT INTO bills (patient_id, bill_date) VALUES
+(1,'2024-03-01'),(2,'2024-03-02');
+
+INSERT INTO bill_items (bill_id,description,amount) VALUES
+(1,'Consultation',50.00),(1,'ECG Test',120.00),
+(2,'Consultation',50.00),(2,'X-Ray',80.00);
+
+-- ---------- SAMPLE QUERIES ----------
+SELECT * FROM v_doctor_schedule;
+SELECT * FROM v_patient_bills;
+
+SELECT d.doctor_id, CONCAT(d.first_name,' ',d.last_name) AS doctor,
+       COUNT(a.appointment_id) AS total_appointments
+FROM doctors d LEFT JOIN appointments a ON d.doctor_id = a.doctor_id
+GROUP BY d.doctor_id ORDER BY total_appointments DESC;
+
+SELECT p.patient_id, CONCAT(p.first_name,' ',p.last_name) AS patient,
+       mh.visit_date, mh.diagnosis
+FROM patients p JOIN medical_history mh ON p.patient_id = mh.patient_id
+ORDER BY mh.visit_date DESC;
+
+SELECT department_id, COUNT(*) AS doctors
+FROM doctors GROUP BY department_id;
+
+
